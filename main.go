@@ -1,21 +1,18 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"github.com/uttamgandhi24/whisper-go/whisper"
+	"io/ioutil"
 	"os"
 	"path/filepath"
-	"strings"
-	"encoding/json"
-	"io/ioutil"
-	"time"
 	"regexp"
 	"strconv"
-	"bufio"
-	// "log"
-	// "github.com/influxdata/influxdb/client/v2"
-	// "github.com/influxdata/influxdb/tsdb/engine/tsm1"
+	"strings"
+	"time"
 )
 
 
@@ -41,21 +38,18 @@ type MigrationConfig struct {
 	Field       string        `json:"field"`
 }
 
+
+// Global vars
 var migrationConfig []MigrationConfig
+var exportedFileNumber = 0
 var (
-	wspPath      = flag.String("wspPath", "NULL", "Whisper files folder path")
-	exportPath   = flag.String("exportPath", "NULL", "Directory to export line protocol files")
-	configFile   = flag.String("configFile", "NULL", "Configuration file for measurement and tags")
+	wspPath           = flag.String("wsp-path", "", "Whisper files folder path.")
+	exportPath        = flag.String("export-path", "", "Directory to export line protocol files.")
+	configFile        = flag.String("config-file", "", "Configuration file for measurement and tags.")
+	keepDirStructure  = flag.Bool("keep-dir-structure", false, "Keep whisper dir structure and filenames. Otherwise export files in a numbered manner.")
+	databaseName      = flag.String("database", "", "Add the influxdb database context to exported files.")
+	createDatabase    = flag.Bool("create-database", false, "Add a CREATE DATABASE query to exported files.")
 )
-
-
-
-
-func check(e error) {
-    if e != nil {
-        panic(e)
-    }
-}
 
 
 func main() {
@@ -74,7 +68,13 @@ func main() {
 		data := MigrationData{}
 		data.wspFile = wspFile
 		data.relativePath = strings.TrimPrefix(wspFile, *wspPath)
-		data.exportFile = *exportPath + strings.Replace(data.relativePath, ".wsp", ".txt", -1)
+
+		if *keepDirStructure {
+			data.exportFile = *exportPath + strings.Replace(data.relativePath, ".wsp", ".txt", -1)
+		} else {
+			exportedFileNumber += 1
+			data.exportFile = *exportPath + fmt.Sprintf("/%08d.txt", exportedFileNumber)
+		}
 
 		// Assign the right measurment, field and tags
 		data.assignConfig()
@@ -84,13 +84,13 @@ func main() {
 		} else {
 			fmt.Println("File didn't match any config patterns: ", data.wspFile)
 		}
-		// Add the export file path ? Or generate it later ? migrationData.exportFile = migrationData.wspFile
 	}
 
-	// Go through wsp files
+	// Set time range to export data
 	from, _ := time.Parse("2006-01-02", "2000-01-01")
 	until, _ := time.Parse("2006-01-02", "2100-01-01")
 
+	// Go through wsp files
 	for _, migration := range migrationData {
 		// Open whisper file with driver
 		w, err := whisper.Open(migration.wspFile)
@@ -106,8 +106,15 @@ func main() {
 		// Open file and prepare writer
 		f, err := os.Create(migration.exportFile)
 		check(err)
-		defer f.Close()
 		writer := bufio.NewWriter(f)
+
+		// Print the commands and context sections
+		if *createDatabase {
+			_, err = writer.WriteString("# DDL\nCREATE DATABASE " + *databaseName + "\n\n")
+			check(err)
+		}
+		_, err = writer.WriteString("# DML\n# CONTEXT-DATABASE: " + *databaseName + "\n\n")
+		check(err)
 
 		// Print all points
 		for _, point := range wspPoints {
@@ -117,11 +124,20 @@ func main() {
 			check(err)
 		}
 
-		// Flush writer
+		// Flush writer and close file
 		writer.Flush()
+		f.Close()
 
-		fmt.Println("Successfully wrote >>>", migration.exportFile)
+		fmt.Println("Exported:", migration.wspFile, " >>>", migration.exportFile)
 	}
+}
+
+
+// Check errors
+func check(e error) {
+    if e != nil {
+        panic(e)
+    }
 }
 
 
@@ -155,6 +171,7 @@ func loadConfigFile(migrationConfig *[]MigrationConfig, filename string) error {
 }
 
 
+// Generate the influxdb line protocol string for a given point
 func (migrationData *MigrationData) lineprotocol(point whisper.Point) string {
 	var line string
 	line += migrationData.measurement
