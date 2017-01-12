@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"compress/gzip"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -49,6 +50,7 @@ var (
 	keepDirStructure  = flag.Bool("keep-dir-structure", false, "Keep whisper dir structure and filenames. Otherwise export files in a numbered manner.")
 	databaseName      = flag.String("database", "", "Add the influxdb database context to exported files.")
 	createDatabase    = flag.Bool("create-database", false, "Add a CREATE DATABASE query to exported files.")
+	gzipped           = flag.Bool("gz", false, "Export data in a gzipped file")
 )
 
 
@@ -69,11 +71,17 @@ func main() {
 		data.wspFile = wspFile
 		data.relativePath = strings.TrimPrefix(wspFile, *wspPath)
 
+		// Figure exported filename
 		if *keepDirStructure {
 			data.exportFile = *exportPath + strings.Replace(data.relativePath, ".wsp", ".txt", -1)
 		} else {
 			exportedFileNumber += 1
 			data.exportFile = *exportPath + fmt.Sprintf("/%08d.txt", exportedFileNumber)
+		}
+
+		// Add the .gz if the export needs to be compressed
+		if *gzipped {
+			data.exportFile += ".gz"
 		}
 
 		// Assign the right measurment, field and tags
@@ -86,11 +94,16 @@ func main() {
 		}
 	}
 
+	// Warning starting exporting
+	fmt.Println("----------------")
+	fmt.Println("Starting exporting", len(migrationData), "metrics to ", *exportPath)
+	fmt.Println("----------------")
+
 	// Set time range to export data
 	from, _ := time.Parse("2006-01-02", "2000-01-01")
 	until, _ := time.Parse("2006-01-02", "2100-01-01")
 
-	// Go through wsp files
+	// Go through wsp files and export data
 	for _, migration := range migrationData {
 		// Open whisper file with driver
 		w, err := whisper.Open(migration.wspFile)
@@ -106,29 +119,40 @@ func main() {
 		// Open file and prepare writer
 		f, err := os.Create(migration.exportFile)
 		check(err)
-		writer := bufio.NewWriter(f)
+
+		var gf *gzip.Writer
+		var fw *bufio.Writer
+		if *gzipped {
+			gf = gzip.NewWriter(f)
+			fw = bufio.NewWriter(gf)
+		} else {
+			fw = bufio.NewWriter(f)
+		}
 
 		// Print the commands and context sections
 		if *createDatabase {
-			_, err = writer.WriteString("# DDL\nCREATE DATABASE " + *databaseName + "\n\n")
+			_, err = fw.WriteString("# DDL\nCREATE DATABASE " + *databaseName + "\n\n")
 			check(err)
 		}
-		_, err = writer.WriteString("# DML\n# CONTEXT-DATABASE: " + *databaseName + "\n\n")
+		_, err = fw.WriteString("# DML\n# CONTEXT-DATABASE: " + *databaseName + "\n\n")
 		check(err)
 
 		// Print all points
 		for _, point := range wspPoints {
 			line := migration.lineprotocol(point) + "\n"
 
-			_, err := writer.WriteString(line)
+			_, err := fw.WriteString(line)
 			check(err)
 		}
 
 		// Flush writer and close file
-		writer.Flush()
+		fw.Flush()
+		if *gzipped {
+			gf.Close()
+		}
 		f.Close()
 
-		fmt.Println("Exported:", migration.wspFile, " >>>", migration.exportFile)
+		fmt.Println("Exported:", migration.exportFile, "from", migration.wspFile)
 	}
 }
 
