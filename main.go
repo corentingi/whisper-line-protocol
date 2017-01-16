@@ -25,6 +25,7 @@ type MigrationData struct {
 	tags         string
 	field        string
 	matched      bool
+	exported     bool
 }
 
 type TagKeyValue struct {
@@ -212,7 +213,7 @@ func (migrationData *MigrationData) lineprotocol(point whisper.Point) string {
 // pattern in the config file
 func (migrationData *MigrationData) assignConfig() {
 
-	wspMeasurement := strings.TrimPrefix(migrationData.wspFile, *wspPath)
+	wspMeasurement := migrationData.wspFile
 	wspMeasurement = strings.TrimSuffix(wspMeasurement, ".wsp")
 	wspMeasurement = strings.Replace(wspMeasurement, "/", ".", -1)
 	wspMeasurement = strings.Replace(wspMeasurement, ",", "_", -1)
@@ -234,6 +235,8 @@ func (migrationData *MigrationData) assignConfig() {
 
 		// List the matching values (Base and groups)
 		re := regexp.MustCompile(pattern)
+
+		fmt.Println(pattern, ">>", wspMeasurement)
 
 		matchedArr = re.FindAllStringSubmatch(wspMeasurement, -1)
 
