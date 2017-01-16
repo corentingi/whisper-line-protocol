@@ -13,7 +13,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 )
 
 
@@ -100,18 +99,21 @@ func main() {
 	fmt.Println("Starting exporting", len(migrationData), "metrics to ", *exportPath)
 	fmt.Println("----------------")
 
-	// Set time range to export data
-	from, _ := time.Parse("2006-01-02", "2000-01-01")
-	until, _ := time.Parse("2006-01-02", "2100-01-01")
-
 	// Go through wsp files and export data
 	for _, migration := range migrationData {
 		// Open whisper file with driver
 		w, err := whisper.Open(migration.wspFile)
-		// fmt.Println("Preparing", migration.wspFile, ">>>", migration.exportFile, "(Size", w.Header.Archives[0].Size(), ")")
 		check(err)
+		// fmt.Println("Preparing", migration.wspFile, ">>>", migration.exportFile, "(Size", w.Header.Archives[0].Size(), ")")
+
 		// Get all points
-		_, wspPoints, err := w.FetchUntilTime(from, until)
+		var wspPoints []whisper.Point
+		for i, _ := range w.Header.Archives {
+			points, err := w.DumpArchive(i)
+			check(err)
+			wspPoints = append(wspPoints, points...)
+		}
+
 		w.Close()
 
 		// Makes sure the directory exists
@@ -235,8 +237,6 @@ func (migrationData *MigrationData) assignConfig() {
 
 		// List the matching values (Base and groups)
 		re := regexp.MustCompile(pattern)
-
-		fmt.Println(pattern, ">>", wspMeasurement)
 
 		matchedArr = re.FindAllStringSubmatch(wspMeasurement, -1)
 
