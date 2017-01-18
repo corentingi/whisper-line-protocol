@@ -111,6 +111,7 @@ func main() {
 		for i, _ := range w.Header.Archives {
 			points, err := w.DumpArchive(i)
 			check(err)
+
 			wspPoints = append(wspPoints, points...)
 		}
 
@@ -213,6 +214,7 @@ func (migrationData *MigrationData) lineprotocol(point whisper.Point) string {
 
 // Get measurement, tags and field by matching the whisper filename with a
 // pattern in the config file
+// This part is inspired by the project https://github.com/influxdata/whisper-migrator
 func (migrationData *MigrationData) assignConfig() {
 
 	wspMeasurement := migrationData.wspFile
