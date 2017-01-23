@@ -51,3 +51,9 @@ for f in /whisper/export/*.txt.gz; do
     mv $f "/whisper/export/done/"
 done
 ```
+
+
+## TODO
+
+- Filter points with `from` and `until` flags
+- Stop and restart option (with a state file to save)
