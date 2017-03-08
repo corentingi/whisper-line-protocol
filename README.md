@@ -56,4 +56,5 @@ done
 ## TODO
 
 - Filter points with `from` and `until` flags
+- Input whisper files from tar.gz archive
 - Stop and restart option (with a state file to save)
