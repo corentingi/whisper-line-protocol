@@ -46,6 +46,7 @@ type MigrationConfig struct {
 var migrationConfig []MigrationConfig
 var exportedFileNumber = 0
 var (
+	verbose           = flag.Bool("verbose", false, "Configuration file for measurement and tags.")
 	wspPath           = flag.String("wsp-path", "", "Whisper files folder path.")
 	exportPath        = flag.String("export-path", "", "Directory to export line protocol files.")
 	configFile        = flag.String("config-file", "", "Configuration file for measurement and tags.")
@@ -104,11 +105,10 @@ func main() {
 	fmt.Println("----------------")
 
 	// Go through wsp files and export data
-	for _, migration := range migrationData {
+	for k, migration := range migrationData {
 		// Open whisper file with driver
 		w, err := whisper.Open(migration.wspFile)
 		check(err)
-		// fmt.Println("Preparing", migration.wspFile, ">>>", migration.exportFileName, "(Size", w.Header.Archives[0].Size(), ")")
 
 		for i, archive := range w.Header.Archives {
 			var wspPoints []whisper.Point
@@ -119,7 +119,9 @@ func main() {
 			// Go through points
 			points, err := w.DumpArchive(i)
 			if err != nil {
-				fmt.Println("Unexpected EOF:", retentionName, "from", migration.wspFile)
+				if *verbose {
+					fmt.Println("Unexpected EOF:", retentionName, "from", migration.wspFile)
+				}
 				continue
 			}
 			for _, point := range points {
@@ -136,7 +138,9 @@ func main() {
 
 			// If there is nothing to write, skip file creation
 			if len(wspPoints) == 0 {
-				// fmt.Println("Skipped:", retentionName, "from", migration.wspFile)
+				if *verbose {
+					fmt.Println("Skipped:", retentionName, "from", migration.wspFile)
+				}
 				continue
 			}
 
@@ -172,8 +176,11 @@ func main() {
 				fw.Flush()
 			}() // <-- function call to defer
 
-			fmt.Println("Exported:", path + "/" + migration.exportFileName, "from", migration.wspFile)
-			// fmt.Print("\rWriting: ", migration.exportFileName)
+			if *verbose {
+				fmt.Println("Exported:", path + "/" + migration.exportFileName, "from", migration.wspFile)
+			} else {
+				fmt.Printf("\rExported: %2d", k)
+			}
 		}
 
 		w.Close()
