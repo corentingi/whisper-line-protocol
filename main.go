@@ -46,13 +46,14 @@ type MigrationConfig struct {
 var migrationConfig []MigrationConfig
 var exportedFileNumber = 0
 var (
-	verbose           = flag.Bool("verbose", false, "Configuration file for measurement and tags.")
-	wspPath           = flag.String("wsp-path", "", "Whisper files folder path.")
-	exportPath        = flag.String("export-path", "", "Directory to export line protocol files.")
-	configFile        = flag.String("config-file", "", "Configuration file for measurement and tags.")
-	fromFlag          = flag.Uint("from", 0, "Configuration file for measurement and tags.")
-	untilFlag         = flag.Uint("until", uint(^uint32(0)), "Configuration file for measurement and tags.")
-	gzipped           = flag.Bool("gz", false, "Export data in a gzipped file")
+	verbose      = flag.Bool("verbose", false, "Configuration file for measurement and tags.")
+	wspPath      = flag.String("wsp-path", "", "Whisper files folder path.")
+	exportPath   = flag.String("export-path", "", "Directory to export line protocol files.")
+	configFile   = flag.String("config-file", "", "Configuration file for measurement and tags.")
+	fromFlag     = flag.Uint("from", 0, "Only export points after the given timestamp.")
+	untilFlag    = flag.Uint("until", uint(^uint32(0)), "Only export points before the given timestamp.")
+	gzipped      = flag.Bool("gz", false, "Export data in a gzipped file.")
+	exportZeros    = flag.Bool("zeros", false, "Export null values (equal to zero). Those are ignored by default.")
 )
 
 
@@ -126,7 +127,7 @@ func main() {
 			}
 			for _, point := range points {
 				// Skip the point on certain conditions
-				if point.Value == 0 {
+				if !*exportZeros && point.Value == 0 {
 					continue
 				}
 				if point.Timestamp < from || point.Timestamp > until {
