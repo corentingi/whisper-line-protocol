@@ -29,6 +29,12 @@ type MigrationData struct {
 	exported        bool
 }
 
+type MigrationBuffer struct {
+	Buffer  *bufio.Writer
+	GzBuffer    *gzip.Writer
+	File      *os.File
+}
+
 type TagKeyValue struct {
 	Tagkey   string `json:"tagkey"`
 	Tagvalue string `json:"tagvalue"`
@@ -43,7 +49,7 @@ type MigrationConfig struct {
 
 
 // Global vars
-var migrationConfig []MigrationConfig
+var buffers map[uint32]MigrationBuffer = make(map[uint32]MigrationBuffer)
 var exportedFileNumber = 0
 var (
 	verbose      = flag.Bool("verbose", false, "Configuration file for measurement and tags.")
@@ -60,19 +66,137 @@ var (
 func main() {
 	flag.Parse()
 
+	// List wsp files and figure out tags, measurements, file names, etc.
+	migrations := ListMigrations(*wspPath, *configFile)
+
+	// Time boundaries
+	var from uint32 = uint32(*fromFlag)
+	var until uint32 = uint32(*untilFlag)
+
+	// Warning starting exporting
+	fmt.Println("----------------")
+	fmt.Println("Exporting", len(migrations), "series to", *exportPath)
+	if askForConfirmation("Proceed ?") == false {
+		os.Exit(1)
+	}
+	fmt.Println("----------------")
+
+	// Go through wsp files and export data
+	for k, migration := range migrations {
+		migration.export(from, until)
+
+		// Notify the file was exported
+		if *verbose {
+			fmt.Println("Exported:", migration.wspFile)
+		} else {
+			fmt.Printf("\rExported: %2d", k)
+		}
+	}
+
+	// Close all buffers
+	for _, buffer := range buffers {
+		buffer.Buffer.Flush()
+		if *gzipped {
+			buffer.GzBuffer.Flush()
+		}
+		buffer.File.Close()
+	}
+}
+
+
+// Check errors
+func check(e error) {
+	if e != nil {
+		panic(e)
+	}
+}
+
+
+func RetrieveMigrationBuffer(i uint32) MigrationBuffer {
+	buffer, ok := buffers[i]
+
+	// Create buffer if it doesnt exist already
+	if !ok {
+		// Open file and prepare writer
+		var err error
+		var path string = *exportPath + "/" + fmt.Sprintf("%d.txt", i)
+		if *gzipped {
+			path += ".gz"
+		}
+
+		// Make sure directory exist or create it
+		os.MkdirAll(*exportPath ,0755);
+
+		// Open the file
+		buffer.File, err = os.Create(path)
+		check(err)
+
+		if *gzipped {
+			buffer.GzBuffer = gzip.NewWriter(buffer.File)
+			buffer.Buffer = bufio.NewWriter(buffer.GzBuffer)
+		} else {
+			buffer.Buffer = bufio.NewWriter(buffer.File)
+		}
+
+		buffers[i] = buffer
+	}
+	return buffer
+}
+
+
+
+
+// Generate the influxdb line protocol string for a given point
+func (migration *MigrationData) export(from, until uint32) {
+	// Open whisper file with driver
+	w, err := whisper.Open(migration.wspFile)
+	check(err)
+
+	for i, archive := range w.Header.Archives {
+		// retrieve the buffer
+		buffer := RetrieveMigrationBuffer(archive.SecondsPerPoint)
+
+		// Go through points
+		points, err := w.DumpArchive(i)
+		if err != nil {
+			if *verbose {
+				fmt.Println("Error reading:", migration.wspFile)
+			}
+			continue
+		}
+		for _, point := range points {
+			// Skip the point on certain conditions
+			if !*exportZeros && point.Value == 0 {
+				continue
+			}
+			if point.Timestamp < from || point.Timestamp > until {
+				continue
+			}
+
+			// Write the point to file
+			line := migration.lineprotocol(point, archive.SecondsPerPoint) + "\n"
+			_, err := buffer.Buffer.WriteString(line)
+			check(err)
+		}
+	}
+
+	w.Close()
+}
+
+
+// List all the migrations in a migration array
+func ListMigrations(wspPath, configFile string) []MigrationData {
 	// List files
-	fileList := []string{}
-	listWspFiles(&fileList, *wspPath)
+	fileList := listWspFiles(wspPath)
 
 	// Open migration config file
-	loadConfigFile(&migrationConfig, *configFile)
+	config := LoadConfigFile(configFile)
 
-	// Go through wsp files and figure out tags, measurements, file names, etc.
 	var migrationData []MigrationData
 	for _, wspFile := range fileList {
 		data := MigrationData{}
 		data.wspFile = wspFile
-		data.relativePath = strings.TrimPrefix(wspFile, *wspPath)
+		data.relativePath = strings.TrimPrefix(wspFile, wspPath)
 
 		// Figure exported filename
 		exportedFileNumber += 1
@@ -84,7 +208,7 @@ func main() {
 		}
 
 		// Assign the right measurment, field and tags
-		data.assignConfig()
+		data.assignConfig(config)
 
 		if data.matched {
 			migrationData = append(migrationData, data)
@@ -93,108 +217,10 @@ func main() {
 		}
 	}
 
-	// Time boundaries
-	var from uint32 = uint32(*fromFlag)
-	var until uint32 = uint32(*untilFlag)
-
-	// Warning starting exporting
-	fmt.Println("----------------")
-	fmt.Println("Exporting", len(migrationData), "series to", *exportPath)
-	if askForConfirmation("Proceed ?") == false {
-		os.Exit(1)
-	}
-	fmt.Println("----------------")
-
-	// Go through wsp files and export data
-	for k, migration := range migrationData {
-		// Open whisper file with driver
-		w, err := whisper.Open(migration.wspFile)
-		check(err)
-
-		for i, archive := range w.Header.Archives {
-			var wspPoints []whisper.Point
-
-			// Give a name to the retention
-			retentionName := fmt.Sprintf("%d-%d", archive.SecondsPerPoint, archive.Points)
-
-			// Go through points
-			points, err := w.DumpArchive(i)
-			if err != nil {
-				if *verbose {
-					fmt.Println("Unexpected EOF:", retentionName, "from", migration.wspFile)
-				}
-				continue
-			}
-			for _, point := range points {
-				// Skip the point on certain conditions
-				if !*exportZeros && point.Value == 0 {
-					continue
-				}
-				if point.Timestamp < from || point.Timestamp > until {
-					continue
-				}
-				
-				wspPoints = append(wspPoints, point)
-			}
-
-			// If there is nothing to write, skip file creation
-			if len(wspPoints) == 0 {
-				if *verbose {
-					fmt.Println("Skipped:", retentionName, "from", migration.wspFile)
-				}
-				continue
-			}
-
-			// Makes sure the directory exists
-			path := *exportPath + "/" + retentionName
-			os.MkdirAll(path ,0755);
-
-			// Write file
-			func() {
-				// Open file and prepare writer
-				f, err := os.Create(path + "/" + migration.exportFileName)
-				check(err)
-				defer f.Close()
-
-				var gf *gzip.Writer
-				var fw *bufio.Writer
-				if *gzipped {
-					gf = gzip.NewWriter(f)
-					fw = bufio.NewWriter(gf)
-					defer gf.Close()
-				} else {
-					fw = bufio.NewWriter(f)
-				}
-
-				// Print all points
-				for _, point := range wspPoints {
-					line := migration.lineprotocol(point, archive.SecondsPerPoint) + "\n"
-					_, err := fw.WriteString(line)
-					check(err)
-				}
-
-				// Flush writer and close file
-				fw.Flush()
-			}() // <-- function call to defer
-
-			if *verbose {
-				fmt.Println("Exported:", path + "/" + migration.exportFileName, "from", migration.wspFile)
-			} else {
-				fmt.Printf("\rExported: %2d", k)
-			}
-		}
-
-		w.Close()
-	}
+	return migrationData
 }
 
 
-// Check errors
-func check(e error) {
-	if e != nil {
-		panic(e)
-	}
-}
 
 
 // Source: https://gist.github.com/m4ng0squ4sh/3dcbb0c8f6cfe9c66ab8008f55f8f28b
@@ -225,14 +251,16 @@ func askForConfirmation(s string) bool {
 
 
 // Create the list of wsp files
-func listWspFiles(fileList *[]string, searchDir string) {
+func listWspFiles(searchDir string) []string {
+	var fileList []string
+
 	err := filepath.Walk(searchDir, func(path string, f os.FileInfo, err error) error {
 		if os.IsNotExist(err) { //search dir does not exist
 			return nil
 		}
 		// Only add wsp files to the list
 		if strings.HasSuffix(f.Name(), "wsp") {
-			*fileList = append(*fileList, path)
+			fileList = append(fileList, path)
 		}
 		return nil
 	})
@@ -240,17 +268,26 @@ func listWspFiles(fileList *[]string, searchDir string) {
 		fmt.Println("Error listing files:")
 		fmt.Println(err)
 	}
+
+	return fileList
 }
 
 
 // Read the config file and populate migrartionData.tagConfigs
-func loadConfigFile(migrationConfig *[]MigrationConfig, filename string) error {
+func LoadConfigFile(filename string) []MigrationConfig {
+	var migrationConfig []MigrationConfig
+
 	raw, err := ioutil.ReadFile(filename)
 	if err != nil {
-		fmt.Println(err.Error())
-		os.Exit(1)
+		panic(err)
 	}
-	return json.Unmarshal(raw, &migrationConfig)
+	
+	err = json.Unmarshal(raw, &migrationConfig)
+	if err != nil {
+		panic(err)
+	}
+
+	return migrationConfig
 }
 
 
@@ -270,7 +307,7 @@ func (migrationData *MigrationData) lineprotocol(point whisper.Point, factor uin
 // Get measurement, tags and field by matching the whisper filename with a
 // pattern in the config file
 // This part is inspired by the project https://github.com/influxdata/whisper-migrator
-func (migrationData *MigrationData) assignConfig() {
+func (migrationData *MigrationData) assignConfig(migrationConfig []MigrationConfig) bool {
 
 	wspMeasurement := migrationData.wspFile
 	wspMeasurement = strings.TrimSuffix(wspMeasurement, ".wsp")
@@ -308,11 +345,10 @@ func (migrationData *MigrationData) assignConfig() {
 
 	// Exit if there was no match
 	if filenameMatched == false {
-		return
+		return false
 	} else {
 		migrationData.matched = true
 	}
-
 
 	// Fill the migrationData object
 	migrationData.measurement = tagConfig.Measurement
@@ -345,4 +381,6 @@ func (migrationData *MigrationData) assignConfig() {
 		migrationData.field = re.ReplaceAllLiteralString(migrationData.field, matched[i])
 		migrationData.tags = re.ReplaceAllLiteralString(migrationData.tags, matched[i])
 	}
+
+	return true
 }
