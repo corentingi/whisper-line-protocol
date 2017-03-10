@@ -52,19 +52,23 @@ type MigrationConfig struct {
 var buffers map[uint32]MigrationBuffer = make(map[uint32]MigrationBuffer)
 var exportedFileNumber = 0
 var (
-	verbose      = flag.Bool("verbose", false, "Configuration file for measurement and tags.")
-	wspPath      = flag.String("wsp-path", "", "Whisper files folder path.")
-	exportPath   = flag.String("export-path", "", "Directory to export line protocol files.")
-	configFile   = flag.String("config-file", "", "Configuration file for measurement and tags.")
-	fromFlag     = flag.Uint("from", 0, "Only export points after the given timestamp.")
-	untilFlag    = flag.Uint("until", uint(^uint32(0)), "Only export points before the given timestamp.")
-	gzipped      = flag.Bool("gz", false, "Export data in a gzipped file.")
+	verbose        = flag.Bool("verbose", false, "Configuration file for measurement and tags.")
+	wspPath        = flag.String("wsp-path", "", "Whisper files folder path.")
+	exportPath     = flag.String("export-path", "", "Target directory where line protocol files will be created.")
+	configFile     = flag.String("config-file", "", "Configuration file for measurement and tags.")
+	fromFlag       = flag.Uint("from", 0, "Only export points after the given timestamp.")
+	untilFlag      = flag.Uint("until", uint(^uint32(0)), "Only export points before the given timestamp.")
+	gzipped        = flag.Bool("gz", false, "Export data in a gzipped file.")
 	exportZeros    = flag.Bool("zeros", false, "Export null values (equal to zero). Those are ignored by default.")
+	database       = flag.String("database", "graphite" ,"Name of the influxdb database to use in export context.")
+	retentionsStr  = flag.String("retentions", "" ,"Coma-separated retention names to use in export context.")
 )
 
+var retentions []string
 
 func main() {
 	flag.Parse()
+	retentions = strings.Split(*retentionsStr, ",")
 
 	// List wsp files and figure out tags, measurements, file names, etc.
 	migrations := ListMigrations(*wspPath, *configFile)
@@ -89,7 +93,7 @@ func main() {
 		if *verbose {
 			fmt.Println("Exported:", migration.wspFile)
 		} else {
-			fmt.Printf("\rExported: %2d", k)
+			fmt.Printf("\rExported: %2d files", k)
 		}
 	}
 
@@ -112,14 +116,14 @@ func check(e error) {
 }
 
 
-func RetrieveMigrationBuffer(i uint32) MigrationBuffer {
-	buffer, ok := buffers[i]
+func RetrieveMigrationBuffer(rate uint32) MigrationBuffer {
+	buffer, ok := buffers[rate]
 
 	// Create buffer if it doesnt exist already
 	if !ok {
-		// Open file and prepare writer
-		var err error
-		var path string = *exportPath + "/" + fmt.Sprintf("%d.txt", i)
+		// Figure out path of the file
+		retention := RetentionPolicyName(rate)
+		var path string = *exportPath + "/" + fmt.Sprintf("%d", rate) + "-" + retention + ".txt"
 		if *gzipped {
 			path += ".gz"
 		}
@@ -128,6 +132,7 @@ func RetrieveMigrationBuffer(i uint32) MigrationBuffer {
 		os.MkdirAll(*exportPath ,0755);
 
 		// Open the file
+		var err error
 		buffer.File, err = os.Create(path)
 		check(err)
 
@@ -138,12 +143,30 @@ func RetrieveMigrationBuffer(i uint32) MigrationBuffer {
 			buffer.Buffer = bufio.NewWriter(buffer.File)
 		}
 
-		buffers[i] = buffer
+		buffers[rate] = buffer
+
+		// Write the context to the buffer
+		buffer.Buffer.WriteString(LineProtocolContext(*database, retention))
 	}
 	return buffer
 }
 
 
+func RetentionPolicyName(rate uint32) string {
+	if len(retentions) > 0 {
+		var current string
+		current, retentions = retentions[0], retentions[1:]
+		return current
+	}
+	return fmt.Sprintf("%d", rate)
+}
+
+
+func LineProtocolContext(database, retention string) string {
+	context := "# DML\n# CONTEXT-DATABASE: " + database
+	context += "\n# CONTEXT-RETENTION-POLICY: " + retention + "\n\n"
+	return context
+}
 
 
 // Generate the influxdb line protocol string for a given point
@@ -246,6 +269,24 @@ func askForConfirmation(s string) bool {
 		} else if response == "n" || response == "no" {
 			return false
 		}
+	}
+}
+
+
+func AskForText(s string) string {
+	reader := bufio.NewReader(os.Stdin)
+
+	for {
+		fmt.Printf("%s: []", s)
+
+		response, err := reader.ReadString('\n')
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		response = strings.ToLower(strings.TrimSpace(response))
+
+		return response
 	}
 }
 
