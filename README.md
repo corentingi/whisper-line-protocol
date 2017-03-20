@@ -7,14 +7,17 @@ This is inspired by the project https://github.com/influxdata/whisper-migrator
 
 ## Usage
 
-Go get the sources
-```
-go get github.com/corentingi/whisper-line-protocol
-```
-
+Usage example:
 
 ```
-whisper-line-protocol -wsp-path=/whisper/data -export-path=/whisper/export -config-file=config.json -database=export -keep-dir-structure=false -gz=true
+whisper-line-protocol \
+  -wsp-path=/whisper/data \
+  -export-path=/whisper/export \
+  -config-file=config.json \
+  -retentions="autogen,one_day,two_month" \
+  -gz \
+  -database=export \
+  -from=1483228800
 ```
 
 ## Config file
@@ -55,6 +58,7 @@ done
 
 ## TODO
 
-- Filter points with `from` and `until` flags
+- Clean the code
+- Input a whisper file list to process
 - Input whisper files from tar.gz archive
 - Stop and restart option (with a state file to save)
