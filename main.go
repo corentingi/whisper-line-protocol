@@ -93,15 +93,17 @@ func main() {
 		if *verbose {
 			fmt.Println("Exported:", migration.wspFile)
 		} else {
-			fmt.Printf("\rExported: %2d files", k)
+			fmt.Printf("\rExported: %2d series", k + 1)
 		}
 	}
+	fmt.Println()
 
 	// Close all buffers
 	for _, buffer := range buffers {
 		buffer.Buffer.Flush()
 		if *gzipped {
 			buffer.GzBuffer.Flush()
+			buffer.GzBuffer.Close()
 		}
 		buffer.File.Close()
 	}
@@ -169,11 +171,14 @@ func LineProtocolContext(database, retention string) string {
 }
 
 
-// Generate the influxdb line protocol string for a given point
+// Export the series described in the migration object
 func (migration *MigrationData) export(from, until uint32) {
 	// Open whisper file with driver
 	w, err := whisper.Open(migration.wspFile)
-	check(err)
+	if err != nil {
+		fmt.Println("\nError opening file:", err)
+		return
+	}
 
 	for i, archive := range w.Header.Archives {
 		// retrieve the buffer
@@ -183,7 +188,7 @@ func (migration *MigrationData) export(from, until uint32) {
 		points, err := w.DumpArchive(i)
 		if err != nil {
 			if *verbose {
-				fmt.Println("Error reading:", migration.wspFile)
+				fmt.Println("\nError reading:", migration.wspFile)
 			}
 			continue
 		}
@@ -215,6 +220,8 @@ func ListMigrations(wspPath, configFile string) []MigrationData {
 	// Open migration config file
 	config := LoadConfigFile(configFile)
 
+	fmt.Println("Checking files to export...")
+
 	var migrationData []MigrationData
 	for _, wspFile := range fileList {
 		data := MigrationData{}
@@ -235,7 +242,7 @@ func ListMigrations(wspPath, configFile string) []MigrationData {
 
 		if data.matched {
 			migrationData = append(migrationData, data)
-		} else {
+		} else if *verbose {
 			fmt.Println("File didn't match any config patterns: ", data.wspFile)
 		}
 	}
@@ -320,11 +327,13 @@ func LoadConfigFile(filename string) []MigrationConfig {
 
 	raw, err := ioutil.ReadFile(filename)
 	if err != nil {
+		fmt.Println("Can't read config file:", filename)
 		panic(err)
 	}
 	
 	err = json.Unmarshal(raw, &migrationConfig)
 	if err != nil {
+		fmt.Println("Can't unmarshal config file json:")
 		panic(err)
 	}
 
