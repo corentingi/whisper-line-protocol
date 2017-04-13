@@ -330,7 +330,7 @@ func LoadConfigFile(filename string) []MigrationConfig {
 		fmt.Println("Can't read config file:", filename)
 		panic(err)
 	}
-	
+
 	err = json.Unmarshal(raw, &migrationConfig)
 	if err != nil {
 		fmt.Println("Can't unmarshal config file json:")
@@ -349,7 +349,7 @@ func (migrationData *MigrationData) lineprotocol(point whisper.Point, factor uin
 	line += " "
 	line += migrationData.field + "=" + strconv.FormatFloat(math.Ceil(point.Value * float64(factor)), 'f', -1, 64)
 	line += " "
-	line += strconv.FormatInt(int64(point.Timestamp), 10)
+	line += strconv.FormatInt(int64(point.Timestamp), 10) + 'i'
 	return line
 }
 

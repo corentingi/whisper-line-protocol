@@ -20,6 +20,8 @@ whisper-line-protocol \
   -from=1483228800
 ```
 
+To simplify the `-retention` argument, it is a list of name in the same order they appear in the Whisper file.
+
 ## Config file
 
 The config file needs to be a Json file with the following structure:
@@ -43,22 +45,28 @@ You can use placeholders like `{{ host }}` that will then be replaces in *measur
 There is no error catching for the moment so make sure to add all the parameters for each pattern in the Json file.
 
 
+## Data format
+
+This version will output interger values in the line protocol format:
+`measurement,tag1=value1 field1=154i,field2=89i 1481515200`
+
+**The timestamp uses a seconds format**. This means you have to use the `s` percision when importing in InfluxDB.
+
+
+
 ## Import process
 
-Once the whisper files have been processed, you can import them to influxdb with this kind of command:
+The import is done using the following command:
+
 ```
-mkdir -p "/whisper/export/done/"
-for f in /whisper/export/*.txt.gz; do
-    echo $f
-    influx -import -path=$f -precision=s -compressed > /dev/null
-    mv $f "/whisper/export/done/"
-done
+influx -port 8086 -import -compressed -precision "s" -pps 0 -path 10-autogen.txt.gz
 ```
+
 
 
 ## TODO
 
 - Clean the code
-- Input a whisper file list to process
+- Input a whisper file list to process (Instead of all the files in the given folder)
 - Input whisper files from tar.gz archive
 - Stop and restart option (with a state file to save)
